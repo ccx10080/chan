@@ -33,13 +33,22 @@ def fetch_klines_from_akshare(code: str, level: str, n: int) -> List[KLine]:
         return []
 
 
-def generate_demo_klines(level: str, n: int) -> List[KLine]:
-    """生成模拟K线数据，用于演示/离线测试"""
+def generate_demo_klines(level_or_code: str, n: int) -> List[KLine]:
+    """生成模拟K线数据，用于演示/离线测试
+    首个参数可以是级别名（daily/30m/5m/1m），也可以是股票代码；
+    对于代码会按内部哈希映射到一个稳定的价格起点。
+    """
     import math
     klines = []
-    # 不同级别设置不同的价格起点和波动
     level_offsets = {"daily": 10.0, "30m": 10.5, "5m": 10.8, "1m": 10.9}
-    base = level_offsets.get(level, 10.0)
+    if level_or_code in level_offsets:
+        base = level_offsets[level_or_code]
+    else:
+        # 按代码哈希得到一个稳定的起始价格
+        h = 0
+        for ch in str(level_or_code):
+            h = (h * 131 + ord(ch)) % 1000003
+        base = 8.0 + (h % 200) / 20.0
     for i in range(n):
         phase = i / 5.0
         high = base + math.sin(phase) * 0.5 + (i % 3) * 0.05
