@@ -3,13 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>缠论区间套股票诊断系统</title>
+<title>缠论区间套股票诊断系统 v1.1</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-                 "Microsoft YaHei", sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
     background: #0f0f1e; color: #e0e0e0; min-height: 100vh;
 }
 .container { max-width: 1500px; margin: 0 auto; padding: 20px; }
@@ -44,6 +43,7 @@ body {
     text-align: center; display: none;
 }
 .signal-banner.show { display: block; }
+.signal-banner.buy { background: linear-gradient(135deg, #00b050 0%, #008a42 100%); }
 .signal-banner h2 { font-size: 24px; margin-bottom: 10px; }
 .signal-banner .signal-price { font-size: 32px; font-weight: bold; margin: 10px 0; }
 .signal-banner .signal-detail { font-size: 14px; opacity: 0.9; }
@@ -77,6 +77,7 @@ body {
 
 .summary-table {
     background: #16213e; border-radius: 12px; padding: 20px; overflow-x: auto;
+    margin-bottom: 20px;
 }
 .summary-table h3 { color: #e94560; margin-bottom: 15px; }
 table { width: 100%; border-collapse: collapse; font-size: 14px; }
@@ -90,20 +91,51 @@ tr:hover { background: #1a1a2e; }
 .badge-up { background: #00b050; color: #fff; }
 .badge-down { background: #fc0101; color: #fff; }
 .badge-side { background: #555; color: #fff; }
+
+.secondary-panel {
+    background: #16213e; border-radius: 12px; padding: 20px; margin-bottom: 20px;
+}
+.secondary-panel h3 { color: #e94560; margin-bottom: 15px; }
+.secondary-panel label { color: #ccc; margin-right: 8px; font-size: 14px; }
+.secondary-panel input, .secondary-panel select {
+    background: #1a1a2e; color: #fff; border: 1px solid #333; border-radius: 6px;
+    padding: 8px 10px; margin-right: 8px; font-size: 14px;
+}
+.secondary-panel input:focus { outline: none; border-color: #e94560; }
+.secondary-panel div.row { margin-bottom: 12px; }
 </style>
 </head>
 <body>
 <div class="container">
     <div class="header">
-        <h1>🎯 缠论区间套股票诊断系统</h1>
+        <h1>🎯 缠论区间套股票诊断系统 v1.1</h1>
         <p>日线 / 30分钟 / 5分钟 / 1分钟 四级联判 · 精确定位买卖点</p>
     </div>
 
     <div class="search-area">
-        <input type="text" id="stockCode" placeholder="股票代码（如：000001、600519、601318）" value="000001">
+        <input type="text" id="stockCode" placeholder="股票代码（如：000001、600519）" value="000001" list="stockOptions">
+        <datalist id="stockOptions"></datalist>
         <input type="text" id="stockName" placeholder="股票名称（可选）" value="平安银行">
         <button class="btn btn-primary" onclick="diagnose()">开始区间套诊断</button>
-        <button class="btn btn-secondary" onclick="loadDemo()">加载演示数据</button>
+        <button class="btn btn-secondary" onclick="loadDemo()">加载演示</button>
+    </div>
+
+    <div class="secondary-panel">
+        <h3>🔍 批量扫描 / 信号回测</h3>
+        <div class="row">
+            <label>股票代码（逗号分隔）:</label>
+            <input type="text" id="batchCodes" style="width: 400px;" value="000001, 600519, 000858, 601318, 600036">
+            <button class="btn btn-primary" onclick="runBatch()">批量扫描</button>
+        </div>
+        <div class="row">
+            <label>回测代码:</label>
+            <input type="text" id="backtestCode" value="000001">
+            <label>历史K线:</label>
+            <input type="number" id="backtestDays" value="120" style="width: 80px;">
+            <label>持仓日:</label>
+            <input type="number" id="holdDays" value="10" style="width: 60px;">
+            <button class="btn btn-primary" onclick="runBacktest()">信号回测</button>
+        </div>
     </div>
 
     <div class="signal-banner" id="signalBanner">
@@ -129,6 +161,18 @@ tr:hover { background: #1a1a2e; }
         <table id="summaryTable"></table>
         <div id="overallAssessment" style="margin-top:20px; padding:15px; background:#1a1a2e; border-radius:8px;"></div>
     </div>
+
+    <div class="summary-table" id="batchArea" style="display:none;">
+        <h3>🔍 批量扫描结果 (按信号强度排序)</h3>
+        <div id="batchStats" style="margin-bottom:15px;"></div>
+        <table id="batchTable"></table>
+    </div>
+
+    <div class="summary-table" id="backtestArea" style="display:none;">
+        <h3>📈 信号回测结果</h3>
+        <div id="backtestStats" style="margin-bottom:15px; padding: 15px; background:#1a1a2e; border-radius: 8px;"></div>
+        <table id="backtestTable"></table>
+    </div>
 </div>
 
 <script>
@@ -136,21 +180,25 @@ const chartInstances = {};
 
 function showError(msg) {
     const el = document.getElementById('errorBox');
-    el.textContent = msg; el.classList.add('show');
+    el.textContent = '❌ ' + msg; el.classList.add('show');
 }
 function hideError() { document.getElementById('errorBox').classList.remove('show'); }
-function showLoading() { document.getElementById('loading').classList.add('show'); }
+function showLoading(text) {
+    document.getElementById('loading').innerHTML = '<span class="spinner"></span>' + (text || '正在进行多级诊断，请稍候...');
+    document.getElementById('loading').classList.add('show');
+}
 function hideLoading() { document.getElementById('loading').classList.remove('show'); }
 
-function renderChart(containerId, klines, priceRange) {
+function renderChart(containerId, klines, priceRange, extraMarkPoints) {
     if (chartInstances[containerId]) { chartInstances[containerId].dispose(); }
     const chartDom = document.getElementById(containerId);
     const chart = echarts.init(chartDom);
     chartInstances[containerId] = chart;
     const dateList = klines.map(k => k.date);
     const ohlc = klines.map(k => [k.open, k.close, k.low, k.high]);
+
     const markLines = [];
-    if (priceRange && priceRange.length == 2) {
+    if (priceRange && priceRange.length == 2 && priceRange[0] > 0) {
         markLines.push([
             { yAxis: priceRange[0], lineStyle: { color: '#ffcc00', width: 1, type: 'dashed' },
               label: { formatter: '中枢低 ' + priceRange[0].toFixed(2), color: '#ffcc00' } },
@@ -158,19 +206,35 @@ function renderChart(containerId, klines, priceRange) {
               label: { formatter: '中枢高 ' + priceRange[1].toFixed(2), color: '#ffcc00' } }
         ]);
     }
+
+    const markPoints = [];
+    if (extraMarkPoints && extraMarkPoints.length) {
+        for (const mp of extraMarkPoints) {
+            markPoints.push({
+                name: mp.name,
+                xAxis: mp.x,
+                yAxis: mp.y,
+                value: mp.value || '★',
+                itemStyle: { color: mp.color || '#e94560' },
+                label: { color: '#fff', fontSize: 14, fontWeight: 'bold' }
+            });
+        }
+    }
+
     chart.setOption({
         tooltip: { trigger: 'axis', axisPointer: { type: 'cross' } },
-        grid: { left: '8%', right: '5%', bottom: '10%', top: '5%' },
+        grid: { left: '10%', right: '5%', bottom: '12%', top: '8%' },
         xAxis: { type: 'category', data: dateList, axisLabel: { color: '#888' }, axisLine: { lineStyle: { color: '#333' } } },
         yAxis: { scale: true, axisLabel: { color: '#888' }, splitLine: { lineStyle: { color: '#2a2a4a' } } },
         dataZoom: [
-            { type: 'inside', start: Math.max(0, 100 - (2000/klines.length)*100), end: 100 },
-            { show: true, type: 'slider', top: '93%', start: Math.max(0, 100 - (2000/klines.length)*100), end: 100 }
+            { type: 'inside', start: 70, end: 100 },
+            { show: true, type: 'slider', top: '93%', start: 70, end: 100 }
         ],
         series: [{
             name: 'K线', type: 'candlestick', data: ohlc,
             itemStyle: { color: '#00b050', color0: '#fc0101', borderColor: '#00b050', borderColor0: '#fc0101' },
-            markLine: { silent: true, symbol: 'none', data: markLines.flat() }
+            markLine: { silent: true, symbol: 'none', data: markLines.flat() },
+            markPoint: { data: markPoints, symbolSize: 20 }
         }]
     });
 }
@@ -183,41 +247,48 @@ function renderSummary(levels, overall, signals) {
     for (const lv of levelOrder) {
         if (!levels[lv]) continue;
         const ld = levels[lv];
-        const trendBadge = ld.diagnosis.trend === '上涨趋势' ? '<span class="badge badge-up">上涨</span>' :
-                           ld.diagnosis.trend === '下跌趋势' ? '<span class="badge badge-down">下跌</span>' :
+        const trend = ld.diagnosis ? ld.diagnosis.trend : '未知';
+        const trendBadge = trend === '上涨趋势' ? '<span class="badge badge-up">上涨</span>' :
+                           trend === '下跌趋势' ? '<span class="badge badge-down">下跌</span>' :
                            '<span class="badge badge-side">盘整</span>';
-        const dirBadge = ld.direction === 'buy' ? '<span class="badge badge-buy">买入</span>' :
-                         ld.direction === 'sell' ? '<span class="badge badge-sell">卖出</span>' :
+        const dir = ld.direction;
+        const dirBadge = dir === 'buy' ? '<span class="badge badge-buy">买入</span>' :
+                         dir === 'sell' ? '<span class="badge badge-sell">卖出</span>' :
                          '<span class="badge badge-none">未定</span>';
+        const fenCount = (ld.diagnosis && ld.diagnosis.fenxings) ? ld.diagnosis.fenxings.length : 0;
+        const biCount = (ld.diagnosis && ld.diagnosis.bis) ? ld.diagnosis.bis.length : 0;
+        const segCount = (ld.diagnosis && ld.diagnosis.segments) ? ld.diagnosis.segments.length : 0;
+        const hasBeichi = ld.has_beichi || (ld.diagnosis && ld.diagnosis.beichi);
         html += `<tr>
             <td><b>${levelNames[lv]}</b></td>
             <td>${trendBadge}</td>
             <td>${ld.has_zhongshu ? '✅ 有' : '❌ 无'}</td>
-            <td>${ld.has_beichi ? '✅ 有' : '❌ 无'}</td>
+            <td>${hasBeichi ? '✅ ' + (ld.diagnosis ? (ld.diagnosis.beichi || '有') : '有') : '❌ 无'}</td>
             <td>${dirBadge}</td>
             <td>${ld.key_price_range[0].toFixed(2)} - ${ld.key_price_range[1].toFixed(2)}</td>
-            <td>${ld.diagnosis.fenxings.length} / ${ld.diagnosis.bis.length} / ${ld.diagnosis.segments.length}</td>
+            <td>${fenCount} / ${biCount} / ${segCount}</td>
         </tr>`;
     }
     html += '</tbody>';
     table.innerHTML = html;
     document.getElementById('overallAssessment').innerHTML =
-        `<b>综合评估:</b> ${overall}${signals && signals.length ? ` (共 ${signals.length} 个信号)` : ''}`;
+        `<b>综合评估:</b> ${overall}${signals && signals.length ? ` · 共检测到 ${signals.length} 个区间套信号` : ''}`;
 }
 
 function renderSignalBanner(topSignal) {
     const banner = document.getElementById('signalBanner');
     if (!topSignal) { banner.classList.remove('show'); return; }
     const isBuy = topSignal.direction === 'buy';
+    banner.classList.toggle('buy', isBuy);
     document.getElementById('signalTitle').innerHTML =
         isBuy ? '🟢 高置信度区间套 <span style="color:#fff">买入</span> 信号' :
                 '🔴 高置信度区间套 <span style="color:#fff">卖出</span> 信号';
     document.getElementById('signalLevels').textContent =
-        '级别: ' + topSignal.levels_involved.join(' → ');
-    document.getElementById('signalPrice').textContent = '¥ ' + topSignal.precise_price.toFixed(4);
+        '级别: ' + (topSignal.levels_involved || []).join(' → ');
+    document.getElementById('signalPrice').textContent = '¥ ' + (typeof topSignal.precise_price === 'number' ? topSignal.precise_price.toFixed(4) : topSignal.precise_price);
     document.getElementById('signalConfidence').textContent =
-        `置信度: ${(topSignal.confidence*100).toFixed(1)}% | 价格得分: ${(topSignal.price_score*100).toFixed(0)}% | 方向得分: ${(topSignal.direction_score*100).toFixed(0)}% | 时间得分: ${(topSignal.time_score*100).toFixed(0)}%`;
-    document.getElementById('signalDesc').textContent = topSignal.description;
+        `置信度: ${(topSignal.confidence*100).toFixed(1)}% | 描述: ${topSignal.description || ''}`;
+    document.getElementById('signalDesc').textContent = '';
     banner.classList.add('show');
 }
 
@@ -231,7 +302,7 @@ async function diagnose() {
     const code = document.getElementById('stockCode').value.trim();
     const name = document.getElementById('stockName').value.trim();
     if (!code) { showError('请输入股票代码'); return; }
-    hideError(); hideResults(); showLoading();
+    hideError(); hideResults(); showLoading('正在进行多级别区间套诊断...');
     try {
         const response = await fetch('/api/multilevel-diagnosis', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -241,17 +312,36 @@ async function diagnose() {
         const data = await response.json();
         document.getElementById('chartsArea').style.display = 'grid';
         document.getElementById('summaryArea').style.display = 'block';
-        // 渲染4个级别K线图
-        const lvs = data.levels;
-        if (lvs.daily) renderChart('chart-daily', lvs.daily.klines, lvs.daily.key_price_range);
-        if (lvs['30m']) renderChart('chart-30m', lvs['30m'].klines, lvs['30m'].key_price_range);
-        if (lvs['5m']) renderChart('chart-5m', lvs['5m'].klines, lvs['5m'].key_price_range);
-        if (lvs['1m']) renderChart('chart-1m', lvs['1m'].klines, lvs['1m'].key_price_range);
-        renderSummary(lvs, data.overall_assessment, data.qjt_signals);
-        if (data.highest_confidence_signal) renderSignalBanner(data.highest_confidence_signal);
-        else document.getElementById('signalBanner').classList.remove('show');
+
+        const lvs = data.levels || {};
+        const levelOrder = ['daily', '30m', '5m', '1m'];
+        const chartIds = { daily: 'chart-daily', '30m': 'chart-30m', '5m': 'chart-5m', '1m': 'chart-1m' };
+
+        for (const lv of levelOrder) {
+            if (lvs[lv] && lvs[lv].klines) {
+                const bps = lvs[lv].buy_sell_points || [];
+                const markPoints = bps.map((bp, i) => ({
+                    name: bp.point_type,
+                    x: Math.min(bp.kline_idx, lvs[lv].klines.length - 1),
+                    y: bp.price,
+                    value: (bp.point_type === 'buy1' ? 'B1' : bp.point_type === 'sell1' ? 'S1' :
+                            bp.point_type === 'buy3' ? 'B3' : bp.point_type === 'sell3' ? 'S3' : '★'),
+                    color: bp.point_type.startsWith('buy') ? '#00b050' : '#e94560'
+                }));
+                renderChart(chartIds[lv], lvs[lv].klines, lvs[lv].key_price_range, markPoints);
+            }
+        }
+
+        renderSummary(lvs, data.overall_assessment || '', data.qjt_signals || []);
+        if (data.highest_confidence_signal) {
+            renderSignalBanner(data.highest_confidence_signal);
+        } else if (data.qjt_signals && data.qjt_signals.length > 0) {
+            renderSignalBanner(data.qjt_signals[0]);
+        } else {
+            document.getElementById('signalBanner').classList.remove('show');
+        }
     } catch (err) {
-        showError('❌ ' + err.message);
+        showError(err.message);
     } finally { hideLoading(); }
 }
 
@@ -260,6 +350,84 @@ function loadDemo() {
     document.getElementById('stockName').value = '平安银行 (演示)';
     return diagnose();
 }
+
+async function runBatch() {
+    const raw = document.getElementById('batchCodes').value.trim();
+    if (!raw) { showError('请输入股票代码列表'); return; }
+    const codes = raw.split(',').map(s => s.trim()).filter(Boolean);
+    hideError(); showLoading(`正在对 ${codes.length} 只股票进行批量扫描...`);
+    try {
+        const resp = await fetch('/api/batch-scan', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ codes, top_n: 50, min_confidence: 0.0, use_demo: true })
+        });
+        if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail); }
+        const data = await resp.json();
+        document.getElementById('batchArea').style.display = 'block';
+        document.getElementById('batchStats').innerHTML =
+            `<b>扫描数量:</b> ${data.total_scanned} | <b>检测到信号:</b> ${data.signals_found || 0} | <b>返回结果:</b> ${(data.ranked_results || []).length}`;
+        let html = '<thead><tr><th>排名</th><th>代码</th><th>名称</th><th>最高置信度</th><th>方向</th><th>信号数</th><th>精确价位</th><th>涉及级别</th></tr></thead><tbody>';
+        (data.ranked_results || []).forEach((r, i) => {
+            const dirBadge = r.direction === 'buy' ? '<span class="badge badge-buy">买入</span>' :
+                             r.direction === 'sell' ? '<span class="badge badge-sell">卖出</span>' :
+                             '<span class="badge badge-none">无</span>';
+            html += `<tr><td>${i+1}</td><td>${r.code}</td><td>${r.name}</td>
+                     <td>${(r.top_confidence * 100).toFixed(1)}%</td><td>${dirBadge}</td>
+                     <td>${r.n_signals}</td><td>${r.precise_price ? '¥' + r.precise_price.toFixed(4) : '-'}</td>
+                     <td>${(r.levels_involved || []).join(', ')}</td></tr>`;
+        });
+        html += '</tbody>';
+        document.getElementById('batchTable').innerHTML = html;
+    } catch (err) {
+        showError(err.message);
+    } finally { hideLoading(); }
+}
+
+async function runBacktest() {
+    const code = document.getElementById('backtestCode').value.trim();
+    const days = parseInt(document.getElementById('backtestDays').value) || 120;
+    const hold = parseInt(document.getElementById('holdDays').value) || 10;
+    if (!code) { showError('请输入股票代码'); return; }
+    hideError(); showLoading('正在执行信号回测...');
+    try {
+        const resp = await fetch('/api/backtest', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code, days_back: days, hold_days: hold, use_demo: true, min_confidence: 0.5 })
+        });
+        if (!resp.ok) { const err = await resp.json(); throw new Error(err.detail); }
+        const d = await resp.json();
+        document.getElementById('backtestArea').style.display = 'block';
+        document.getElementById('backtestStats').innerHTML =
+            `<b>代码:</b> ${d.code} | <b>信号数量:</b> ${d.total_signals} | <b>触发交易:</b> ${d.trades ? d.trades.length : 0}<br>` +
+            `<b>胜率:</b> ${(d.win_rate*100).toFixed(1)}% | <b>平均收益:</b> ${d.avg_return.toFixed(2)}% | ` +
+            `<b>最大收益:</b> ${d.max_return.toFixed(2)}% | <b>最小收益:</b> ${d.min_return.toFixed(2)}%`;
+        let html = '<thead><tr><th>序号</th><th>信号位置</th><th>开仓价</th><th>平仓价</th><th>持仓日</th><th>收益率%</th><th>方向</th></tr></thead><tbody>';
+        (d.trades || []).forEach((t, i) => {
+            const color = t.return_pct >= 0 ? '#00b050' : '#fc0101';
+            html += `<tr><td>${i+1}</td><td>${t.signal_date_idx}</td>
+                     <td>${t.price_in.toFixed(4)}</td><td>${t.price_out.toFixed(4)}</td>
+                     <td>${t.hold_days}</td>
+                     <td style="color:${color}; font-weight: bold;">${t.return_pct.toFixed(2)}%</td>
+                     <td>${t.direction}</td></tr>`;
+        });
+        html += '</tbody>';
+        document.getElementById('backtestTable').innerHTML = html;
+    } catch (err) {
+        showError(err.message);
+    } finally { hideLoading(); }
+}
+
+// 加载股票联想数据
+(async function initStockOptions() {
+    try {
+        const resp = await fetch('/api/stock/list');
+        if (resp.ok) {
+            const data = await resp.json();
+            const datalist = document.getElementById('stockOptions');
+            datalist.innerHTML = (data.stocks || []).map(s => `<option value="${s.code}">${s.name} (${s.sector || ''})</option>`).join('');
+        }
+    } catch (e) { /* 忽略 */ }
+})();
 
 window.addEventListener('resize', () => {
     for (const id in chartInstances) chartInstances[id].resize();
