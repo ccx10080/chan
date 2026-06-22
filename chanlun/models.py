@@ -16,12 +16,15 @@ class FenXing(BaseModel):
     start_idx: int
     peak_idx: int
     end_idx: int
+    peak_price: float = 0.0   # 分型极值价（顶分型=最高high，底分型=最低low），来自"包含处理后K线"
 
 
 class Bi(BaseModel):
-    start: int
-    end: int
+    start: int           # 起点分型 peak_idx（基于原始K线索引）
+    end: int             # 终点分型 peak_idx（基于原始K线索引）
     direction: Literal["up", "down"]
+    high: float = 0.0    # 笔范围内（原始K线）最高 high
+    low: float = 0.0     # 笔范围内（原始K线）最低 low
 
 
 class Segment(BaseModel):
@@ -29,12 +32,17 @@ class Segment(BaseModel):
     end: int
     direction: Literal["up", "down"]
     bis: List[int] = []
+    high: float = 0.0    # 线段范围内最高 high
+    low: float = 0.0     # 线段范围内最低 low
+    has_zhongshu: bool = False  # 线段内部是否已形成"级别内中枢结构"（走势类型意义）
 
 
 class Zhongshu(BaseModel):
-    start: int
-    end: int
-    range: List[float]
+    start: int                      # 中枢起点（原始K线索引）
+    end: int                        # 中枢终点（原始K线索引）
+    range: List[float]              # [中枢下沿, 中枢上沿] 价格区间
+    direction: Optional[str] = None # 中枢构建方向："up"（下-上-下）或 "down"（上-下-上）
+    is_extension: bool = False      # 是否由"延伸/扩展"合并形成
 
 
 class DiagnosisResult(BaseModel):

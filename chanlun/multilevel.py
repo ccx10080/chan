@@ -1,22 +1,36 @@
+"""
+chanlun/multilevel.py
+======================
+多级别区间套诊断（结合律升级版）。
+
+缠论"区间套"的核心前提：
+  - 大级别走势必须能够"对应"到小级别的一段走势，且小级别内部必须
+    存在同级别的走势结构（即"大级别一段 = 小级别含中枢的走势类型"）。
+
+本模块实现：
+  1) 对 daily / 30m / 5m / 1m 各自独立计算一次单级别诊断；
+  2) 在多级别组合信号时，额外校验：
+        * 信号方向在各级别上一致；
+        * 各级别的关键价格区间交集非空；
+        * 若某级别没有中枢结构，则该级别不能参与"区间套"信号；
+  3) 通过上述校验的组合才会输出为最终信号。
+"""
 import logging
 from typing import List, Dict, Optional
 from chanlun.models import KLine, MultiLevelResult, LevelData, QJTSignal
-from chanlun.diagnosis import build_level_data
+from chanlun.diagnosis import ChanLunDiagnosis
 from chanlun.qjt_engine import QJTEngine
 
 
 def fetch_klines_from_akshare(code: str, level: str, n: int) -> List[KLine]:
-    """从 akshare 获取指定级别K线数据；如失败则返回空列表"""
     try:
         import akshare as ak
         period_map = {"daily": "daily", "30m": "30", "5m": "5", "1m": "1"}
         period = period_map.get(level, "daily")
-
         df = ak.stock_zh_a_hist(symbol=code, period=period, adjust="qfq")
         if df is None or len(df) == 0:
             return []
         df = df.tail(n)
-
         return [
             KLine(
                 date=str(row.get('日期', i)),
@@ -34,35 +48,82 @@ def fetch_klines_from_akshare(code: str, level: str, n: int) -> List[KLine]:
 
 
 def generate_demo_klines(level_or_code: str, n: int) -> List[KLine]:
-    """生成模拟K线数据，用于演示/离线测试
-    首个参数可以是级别名（daily/30m/5m/1m），也可以是股票代码；
-    对于代码会按内部哈希映射到一个稳定的价格起点。
-    """
+    """为缺失数据源生成演示 K 线（带明显三段结构，便于中枢识别）。"""
     import math
-    klines = []
     level_offsets = {"daily": 10.0, "30m": 10.5, "5m": 10.8, "1m": 10.9}
     if level_or_code in level_offsets:
         base = level_offsets[level_or_code]
     else:
-        # 按代码哈希得到一个稳定的起始价格
         h = 0
         for ch in str(level_or_code):
             h = (h * 131 + ord(ch)) % 1000003
         base = 8.0 + (h % 200) / 20.0
+
+    klines = []
+    # 构造三段式（上涨-回调-上涨）的走势，便于形成中枢
     for i in range(n):
-        phase = i / 5.0
-        high = base + math.sin(phase) * 0.5 + (i % 3) * 0.05
-        low = high - 0.3 - (i % 2) * 0.05
-        close = (high + low) / 2
-        open_price = close + 0.02
-        klines.append(KLine(date=str(i), open=round(open_price, 4),
-                            high=round(high, 4), low=round(low, 4),
-                            close=round(close, 4), volume=1000.0))
+        # 三段式
+        phase1 = math.sin(i / 5.0)
+        phase2 = math.sin(i / 13.0)
+        price = base + 0.6 * phase1 + 0.2 * phase2 + (i % 5) * 0.02
+        high = price + 0.3
+        low = price - 0.3
+        close = price
+        open_price = price + 0.05
+        klines.append(KLine(
+            date=str(i),
+            open=round(float(open_price), 4),
+            high=round(float(high), 4),
+            low=round(float(low), 4),
+            close=round(float(close), 4),
+            volume=1000.0,
+        ))
     return klines
 
 
+def build_level_data(code: str, name: str, level: str,
+                     level_name_cn: str, klines: List[KLine]) -> LevelData:
+    """对单个级别执行一次完整诊断，并返回其 LevelData。"""
+    diagnosis = ChanLunDiagnosis(code, name, klines).run()
+
+    if diagnosis.zhongshus:
+        zs_low = min(z.range[0] for z in diagnosis.zhongshus)
+        zs_high = max(z.range[1] for z in diagnosis.zhongshus)
+        key_price = [zs_low, zs_high]
+        last_zs = diagnosis.zhongshus[-1]
+        key_time = [last_zs.start, last_zs.end]
+    else:
+        key_price = [min(float(k.low) for k in klines), max(float(k.high) for k in klines)]
+        key_time = [len(klines) // 2, len(klines) - 1]
+
+    if diagnosis.beichi and "down" in str(diagnosis.beichi):
+        direction = "buy"
+    elif diagnosis.beichi and "up" in str(diagnosis.beichi):
+        direction = "sell"
+    elif diagnosis.trend == "下跌趋势":
+        direction = "buy"
+    elif diagnosis.trend == "上涨趋势":
+        direction = "sell"
+    else:
+        direction = None
+
+    return LevelData(
+        level=level,
+        level_name_cn=level_name_cn,
+        klines=klines,
+        diagnosis=diagnosis,
+        key_price_range=[round(float(x), 6) for x in key_price],
+        key_time_range=key_time,
+        direction=direction,
+        has_zhongshu=bool(diagnosis.zhongshus),
+        has_beichi=diagnosis.beichi is not None,
+    )
+
+
 class MultiLevelDiagnosis:
-    """多级别诊断主流程 - 日线 / 30m / 5m / 1m 四级联判"""
+    """多级别区间套诊断主流程 —— daily / 30m / 5m / 1m 四级联判，
+       结合律要求：参与区间套的级别必须"存在中枢结构"，且方向一致、价格区间交集非空。
+    """
 
     def __init__(self, code: str, name: str = "", use_demo: bool = True):
         self.code = code
@@ -77,7 +138,6 @@ class MultiLevelDiagnosis:
 
     def run(self) -> MultiLevelResult:
         levels: Dict[str, LevelData] = {}
-
         for level, level_cn, n_bars in self.level_configs:
             if self.use_demo:
                 klines = generate_demo_klines(level, n_bars)
@@ -85,7 +145,6 @@ class MultiLevelDiagnosis:
                 klines = fetch_klines_from_akshare(self.code, level, n_bars)
                 if len(klines) < 10:
                     klines = generate_demo_klines(level, n_bars)
-
             if len(klines) >= 10:
                 ld = build_level_data(self.code, self.name, level, level_cn, klines)
                 levels[level] = ld
@@ -93,10 +152,30 @@ class MultiLevelDiagnosis:
         if not levels:
             raise ValueError("所有级别数据获取失败，无法进行诊断")
 
-        signals = QJTEngine().detect_signals(levels)
+        # ---------- 结合律：多级别一致性校验 ----------
+        # 仅保留有"中枢结构"的级别参与区间套信号计算
+        qjt_levels = {k: v for k, v in levels.items() if v.has_zhongshu}
+        signals: List[QJTSignal] = []
+        if len(qjt_levels) >= 2:
+            signals = QJTEngine().detect_signals(qjt_levels)
+            # 二次校验：方向一致 + 价格区间交集非空
+            filtered: List[QJTSignal] = []
+            for sig in signals:
+                involved = [qjt_levels[lv] for lv in sig.levels_involved if lv in qjt_levels]
+                if len(involved) < 2:
+                    continue
+                directions = {ld.direction for ld in involved if ld.direction}
+                if len(directions) != 1:
+                    continue
+                low = max(ld.key_price_range[0] for ld in involved)
+                high = min(ld.key_price_range[1] for ld in involved)
+                if high <= low:
+                    continue
+                filtered.append(sig)
+            signals = filtered
+
         highest = signals[0] if signals else None
 
-        # 汇总评估信息
         parts = []
         for lv_key, ld in levels.items():
             parts.append(
@@ -108,15 +187,14 @@ class MultiLevelDiagnosis:
         overall = "; ".join(parts)
 
         if signals:
-            signal_summary = f"。检测到 {len(signals)} 个区间套信号，"
             top = signals[0]
             dir_text = "买入" if top.direction == "buy" else "卖出"
             lv_text = "、".join(top.levels_involved)
-            signal_summary += (f"最高置信度 {top.confidence:.2f} {dir_text}信号 "
-                               f"({lv_text}), 精确价位 {top.precise_price}")
-            overall += signal_summary
+            overall += (f"。检测到 {len(signals)} 个区间套信号；"
+                        f"最高置信度 {top.confidence:.2f} {dir_text}信号 "
+                        f"({lv_text}), 精确价位 {top.precise_price}")
         else:
-            overall += "。未检测到有效区间套信号"
+            overall += "。未检测到有效区间套信号（可能某些级别缺少中枢结构）"
 
         return MultiLevelResult(
             code=self.code,
@@ -124,5 +202,5 @@ class MultiLevelDiagnosis:
             levels=levels,
             qjt_signals=signals,
             overall_assessment=overall,
-            highest_confidence_signal=highest
+            highest_confidence_signal=highest,
         )
