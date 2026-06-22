@@ -38,11 +38,14 @@ class Segment(BaseModel):
 
 
 class Zhongshu(BaseModel):
-    start: int                      # 中枢起点（原始K线索引）
-    end: int                        # 中枢终点（原始K线索引）
-    range: List[float]              # [中枢下沿, 中枢上沿] 价格区间
-    direction: Optional[str] = None # 中枢构建方向："up"（下-上-下）或 "down"（上-下-上）
-    is_extension: bool = False      # 是否由"延伸/扩展"合并形成
+    start: int                       # 中枢起点（原始K线索引）
+    end: int                         # 中枢终点（原始K线索引）
+    range: List[float]               # [中枢下沿, 中枢上沿] 价格区间
+    direction: Optional[str] = None  # 中枢构建方向："up"（下-上-下）或 "down"（上-下-上）
+    is_extension: bool = False       # 是否由"延伸/扩展"合并形成
+    level: int = 1                   # 中枢级别（1=本级，2=高一级，依此类推；用于"延伸≥9段升级"）
+    segment_count: int = 3           # 该中枢实际覆盖的线段数量（≥3）
+    zhongshu_type: str = "normal"    # "normal"=普通三段 / "extension"=延伸 / "expansion"=扩展 / "higher"=升级后
 
 
 class DiagnosisResult(BaseModel):

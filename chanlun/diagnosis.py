@@ -22,7 +22,8 @@ class ChanLunDiagnosis:
         segments = SegmentAnalyzer(bis).build_segments()
         zhongshus = ZhongshuDetector(segments).detect()
         trend = TrendAnalyzer(segments).analyze()
-        beichi = BeichiDetector(segments).detect()
+        # 将中枢信息传给背驰检测器，用于区分"趋势背驰"与"盘整背驰"
+        beichi = BeichiDetector(segments, zhongshus=zhongshus).detect()
         return DiagnosisResult(
             code=self.code, name=self.name, klines=self.klines,
             fenxings=fenxings, bis=bis, segments=segments,
